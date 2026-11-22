@@ -106,7 +106,26 @@ with tabs[0]:
     st.subheader("Tabel meteo • 46 zile")
     st.caption("HDD ponderat: proxy din 15 orașe și ponderi regionale de consum rezidențial/comercial; nu Bcf.")
     display=table.rename(columns={"date":"Data","temp_mean":"Temp. medie °C","temp_min":"Min. punct °C","hdd_weighted":"HDD ponderat","delta_vs_yesterday":"Δ vs ieri"})
-    st.dataframe(display.drop(columns=["num"],errors="ignore").style.format({"Temp. medie °C":"{:.1f}","Min. punct °C":"{:.1f}","HDD ponderat":"{:.2f}","Δ vs ieri":"{:+.2f}"},na_rep="—").background_gradient(cmap="RdBu_r",subset=["Temp. medie °C","Min. punct °C"],vmin=-25,vmax=25).background_gradient(cmap="coolwarm_r",subset=["HDD ponderat"]),use_container_width=True,hide_index=True,height=560)
+    def cell_color(v):
+        if pd.isna(v): return ""
+        if v <= -15: bg="#153a9a"
+        elif v <= -5: bg="#2563eb"
+        elif v <= 5: bg="#475569"
+        elif v <= 15: bg="#c2410c"
+        else: bg="#b91c1c"
+        return f"background-color: {bg};color: white;font-weight: 600"
+    def hdd_color(v):
+        if pd.isna(v): return ""
+        if v >= 45: bg="#172554"
+        elif v >= 30: bg="#1d4ed8"
+        elif v >= 15: bg="#3b82f6"
+        else: bg="#9a3412"
+        return f"background-color: {bg};color: white;font-weight: 600"
+    styled=(display.drop(columns=["num"],errors="ignore").style
+            .format({"Temp. medie °C":"{:.1f}","Min. punct °C":"{:.1f}","HDD ponderat":"{:.2f}","Δ vs ieri":"{:+.2f}"},na_rep="—")
+            .map(cell_color,subset=["Temp. medie °C","Min. punct °C"])
+            .map(hdd_color,subset=["HDD ponderat"]))
+    st.dataframe(styled,use_container_width=True,hide_index=True,height=560)
     st.download_button("Descarcă CSV • 46 zile",table.to_csv(index=False).encode(),file_name="natgas_ec46_46_zile.csv",mime="text/csv",use_container_width=True)
     st.caption("Δ vs ieri compară zile consecutive, NU două rulări ale modelului.")
 with tabs[1]:
