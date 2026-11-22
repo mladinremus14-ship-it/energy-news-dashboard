@@ -104,8 +104,16 @@ if not day_list:st.stop()
 tabs=st.tabs(["📅 46 zile","🌡️ European","🧊 Aer polar","🔥 HDD regiuni"])
 with tabs[0]:
     st.subheader("Tabel meteo • 46 zile")
-    st.caption("HDD ponderat: proxy din 15 orașe și ponderi regionale de consum rezidențial/comercial; nu Bcf.")
-    display=table.rename(columns={"date":"Data","temp_mean":"Temp. medie °C","temp_min":"Min. punct °C","hdd_weighted":"HDD ponderat","delta_vs_yesterday":"Δ vs ieri"})
+    st.caption("Format compact pentru telefon; datele complete sunt disponibile separat.")
+    compact=st.toggle("Tabel compact",value=True,key="compact_46")
+    if compact:
+        display=table[["date","temp_mean","hdd_weighted","delta_vs_yesterday"]].rename(columns={
+            "date":"Data","temp_mean":"°C","hdd_weighted":"HDD","delta_vs_yesterday":"Δ HDD"})
+        display["Data"]=pd.to_datetime(display["Data"]).dt.strftime("%d.%m")
+    else:
+        display=table[["date","temp_mean","temp_min","hdd_weighted","delta_vs_yesterday"]].rename(columns={
+            "date":"Data","temp_mean":"Temp. medie °C","temp_min":"Temp. min. °C",
+            "hdd_weighted":"HDD ponderat","delta_vs_yesterday":"Δ HDD vs ieri"})
     def cell_color(v):
         if pd.isna(v): return ""
         if v <= -15: bg="#153a9a"
@@ -121,13 +129,30 @@ with tabs[0]:
         elif v >= 15: bg="#3b82f6"
         else: bg="#9a3412"
         return f"background-color: {bg};color: white;font-weight: 600"
-    styled=(display.drop(columns=["num"],errors="ignore").style
-            .format({"Temp. medie °C":"{:.1f}","Min. punct °C":"{:.1f}","HDD ponderat":"{:.2f}","Δ vs ieri":"{:+.2f}"},na_rep="—")
-            .map(cell_color,subset=["Temp. medie °C","Min. punct °C"])
-            .map(hdd_color,subset=["HDD ponderat"]))
-    st.dataframe(styled,use_container_width=True,hide_index=True,height=560)
+    def delta_color(v):
+        if pd.isna(v): return ""
+        magnitude=min(abs(float(v))/5.0,1.0)
+        alpha=0.18+0.82*magnitude
+        color=(205,35,55) if v<0 else (35,90,230) if v>0 else (90,90,90)
+        return f"background-color: rgba({color[0]},{color[1]},{color[2]},{alpha:.2f});color: white;font-weight: 600"
+    tcol="°C" if compact else "Temp. medie °C"
+    hcol="HDD" if compact else "HDD ponderat"
+    dcol="Δ HDD" if compact else "Δ HDD vs ieri"
+    fmt={tcol:"{:.1f}",hcol:"{:.2f}",dcol:"{:+.2f}"}
+    style=display.style.format(fmt,na_rep="—").map(cell_color,subset=[tcol])
+    if not compact:
+        fmt["Temp. min. °C"]="{:.1f}"
+        style=display.style.format(fmt,na_rep="—").map(cell_color,subset=[tcol,"Temp. min. °C"])
+    style=style.map(hdd_color,subset=[hcol]).map(delta_color,subset=[dcol])
+    widths={"Data":72,tcol:84,hcol:84,dcol:88}
+    if not compact: widths={"Data":114,tcol:124,"Temp. min. °C":124,hcol:120,dcol:120}
+    st.dataframe(style,use_container_width=True,hide_index=True,height=540,
+                 column_config={name:st.column_config.Column(name,width=width) for name,width in widths.items()})
+    with st.expander("Detalii meteo • toate valorile"):
+        st.dataframe(table,hide_index=True,use_container_width=True)
+        st.caption("HDD ponderat: proxy din 15 orașe și ponderi regionale rezidențial/comercial, nu Bcf.")
     st.download_button("Descarcă CSV • 46 zile",table.to_csv(index=False).encode(),file_name="natgas_ec46_46_zile.csv",mime="text/csv",use_container_width=True)
-    st.caption("Δ vs ieri compară zile consecutive, NU două rulări ale modelului.")
+    st.caption("Δ HDD compară zile consecutive, NU două rulări ECMWF.")
 with tabs[1]:
     st.subheader("Hartă temperatură • EC46")
     selected=st.select_slider("Ziua prognozată",options=day_list,value=day_list[min(6,len(day_list)-1)],key="tempdate")
