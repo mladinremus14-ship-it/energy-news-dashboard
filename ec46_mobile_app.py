@@ -102,57 +102,80 @@ except Exception as ex:
 day_list=table.date.tolist()
 if not day_list:st.stop()
 tabs=st.tabs(["📅 46 zile","🌡️ European","🧊 Aer polar","🔥 HDD regiuni"])
+@st.cache_data(ttl=3600,show_spinner=False)
+def historical_ng_price_changes():
+    """Closing-price return of NG=F futures, by New York trading date."""
+    try:
+        now=pd.Timestamp.now(tz="UTC")
+        end=int((now+pd.Timedelta(days=2)).timestamp())
+        start=end-95*86400
+        url="https://query1.finance.yahoo.com/v8/finance/chart/NG=F"
+        response=requests.get(url,params={"period1":start,"period2":end,"interval":"1d"},
+                              headers={"User-Agent":"Mozilla/5.0"},timeout=15)
+        response.raise_for_status()
+        result=response.json()["chart"]["result"][0]
+        stamps=result["timestamp"]
+        closes=result["indicators"]["quote"][0]["close"]
+        dates=[pd.Timestamp(t,unit="s",tz="UTC").tz_convert("America/New_York").strftime("%Y-%m-%d") for t in stamps]
+        data=pd.DataFrame({"date":dates,"close":closes}).dropna(subset=["close"])
+        data=data.drop_duplicates("date",keep="last").sort_values("date")
+        data["pct"]=data["close"].pct_change()*100
+        return dict(zip(data.date,data.pct))
+    except Exception:
+        return {}
+
 with tabs[0]:
-    st.subheader("Tabel meteo • 46 zile")
-    st.caption("Format compact pentru telefon; datele complete sunt disponibile separat.")
-    compact=st.toggle("Tabel compact",value=True,key="compact_46")
-    if compact:
-        display=table[["date","temp_mean","hdd_weighted","delta_vs_yesterday"]].rename(columns={
-            "date":"Data","temp_mean":"°C","hdd_weighted":"HDD","delta_vs_yesterday":"Δ HDD"})
-        display["Data"]=pd.to_datetime(display["Data"]).dt.strftime("%d.%m")
-    else:
-        display=table[["date","temp_mean","temp_min","hdd_weighted","delta_vs_yesterday"]].rename(columns={
-            "date":"Data","temp_mean":"Temp. medie °C","temp_min":"Temp. min. °C",
-            "hdd_weighted":"HDD ponderat","delta_vs_yesterday":"Δ HDD vs ieri"})
-    def cell_color(v):
+    st.subheader("EC46 • 46 zile")
+    st.caption("6 coloane • semnal meteo din variația HDD față de ziua anterioară")
+    price_changes=historical_ng_price_changes()
+    view=table[["date","temp_mean","hdd_weighted","delta_vs_yesterday"]].copy()
+    def meteo_signal(x):
+        if pd.isna(x): return "—"
+        if abs(x)<0.5: return "NEUTRU"
+        return "BULLISH" if x>0 else "BEARISH"
+    def real_return(d):
+        v=price_changes.get(d)
+        if v is None or pd.isna(v): return "—"
+        if abs(v)<0.05: return "0,0%"
+        return ("▲ " if v>0 else "▼ ")+f"{v:+.1f}%"
+    view["Semnal"]=view["delta_vs_yesterday"].map(meteo_signal)
+    view["Real"]=view["date"].map(real_return)
+    view=view.rename(columns={"date":"Ziua","temp_mean":"Temp.","hdd_weighted":"HDD","delta_vs_yesterday":"Δ HDD"})
+    view["Ziua"]=pd.to_datetime(view["Ziua"]).dt.strftime("%d.%m")
+    def color_temp(v):
         if pd.isna(v): return ""
-        if v <= -15: bg="#153a9a"
-        elif v <= -5: bg="#2563eb"
-        elif v <= 5: bg="#475569"
-        elif v <= 15: bg="#c2410c"
-        else: bg="#b91c1c"
-        return f"background-color: {bg};color: white;font-weight: 600"
-    def hdd_color(v):
+        bg="#2563eb" if v<0 else "#475569" if v<10 else "#b45309"
+        return f"background-color:{bg};color:white"
+    def color_delta(v):
         if pd.isna(v): return ""
-        if v >= 45: bg="#172554"
-        elif v >= 30: bg="#1d4ed8"
-        elif v >= 15: bg="#3b82f6"
-        else: bg="#9a3412"
-        return f"background-color: {bg};color: white;font-weight: 600"
-    def delta_color(v):
-        if pd.isna(v): return ""
-        magnitude=min(abs(float(v))/5.0,1.0)
-        alpha=0.18+0.82*magnitude
-        color=(205,35,55) if v<0 else (35,90,230) if v>0 else (90,90,90)
-        return f"background-color: rgba({color[0]},{color[1]},{color[2]},{alpha:.2f});color: white;font-weight: 600"
-    tcol="°C" if compact else "Temp. medie °C"
-    hcol="HDD" if compact else "HDD ponderat"
-    dcol="Δ HDD" if compact else "Δ HDD vs ieri"
-    fmt={tcol:"{:.1f}",hcol:"{:.2f}",dcol:"{:+.2f}"}
-    style=display.style.format(fmt,na_rep="—").map(cell_color,subset=[tcol])
-    if not compact:
-        fmt["Temp. min. °C"]="{:.1f}"
-        style=display.style.format(fmt,na_rep="—").map(cell_color,subset=[tcol,"Temp. min. °C"])
-    style=style.map(hdd_color,subset=[hcol]).map(delta_color,subset=[dcol])
-    widths={"Data":72,tcol:84,hcol:84,dcol:88}
-    if not compact: widths={"Data":114,tcol:124,"Temp. min. °C":124,hcol:120,dcol:120}
-    st.dataframe(style,use_container_width=True,hide_index=True,height=540,
-                 column_config={name:st.column_config.Column(name,width=width) for name,width in widths.items()})
-    with st.expander("Detalii meteo • toate valorile"):
+        alpha=0.20+0.80*min(abs(float(v))/5.0,1)
+        rgb="30,80,215" if v>0 else "200,35,50" if v<0 else "100,100,100"
+        return f"background-color:rgba({rgb},{alpha:.2f});color:white;font-weight:600"
+    def color_signal(v):
+        bg="#1d4ed8" if v=="BULLISH" else "#b91c1c" if v=="BEARISH" else "#475569"
+        return f"background-color:{bg};color:white;font-weight:600"
+    def color_real(v):
+        bg="#166534" if "▲" in str(v) else "#b91c1c" if "▼" in str(v) else "#475569"
+        return f"background-color:{bg};color:white;font-weight:600" if v!="—" else ""
+    style=(view.style.format({"Temp.":"{:.1f}","HDD":"{:.2f}","Δ HDD":"{:+.2f}"},na_rep="—")
+           .map(color_temp,subset=["Temp."])
+           .map(color_delta,subset=["Δ HDD"])
+           .map(color_signal,subset=["Semnal"])
+           .map(color_real,subset=["Real"]))
+    st.dataframe(style,use_container_width=False,hide_index=True,height=570,
+                 column_config={
+                    "Ziua":st.column_config.TextColumn("Ziua",width=64),
+                    "Temp.":st.column_config.NumberColumn("Temp.",width=70),
+                    "HDD":st.column_config.NumberColumn("HDD",width=75),
+                    "Δ HDD":st.column_config.NumberColumn("Δ HDD",width=80),
+                    "Semnal":st.column_config.TextColumn("Semnal",width=91),
+                    "Real":st.column_config.TextColumn("Real",width=83)})
+    st.caption("Semnal = direcția necesarului de încălzire față de ziua precedentă, NU variația față de rularea ECMWF precedentă. Nu prezice prețul.")
+    st.caption("Real = variația zilnică a închiderii contractului futures NG=F, nu consumul real de gaz. „—” = zi viitoare, netranzacționată ori sursă indisponibilă.")
+    with st.expander("Detalii meteo • tabel complet"):
         st.dataframe(table,hide_index=True,use_container_width=True)
-        st.caption("HDD ponderat: proxy din 15 orașe și ponderi regionale rezidențial/comercial, nu Bcf.")
-    st.download_button("Descarcă CSV • 46 zile",table.to_csv(index=False).encode(),file_name="natgas_ec46_46_zile.csv",mime="text/csv",use_container_width=True)
-    st.caption("Δ HDD compară zile consecutive, NU două rulări ECMWF.")
+        st.caption("HDD sunt indici proxy, ponderați cu consum regional rezidențial/comercial.")
+    st.download_button("Descarcă CSV • 46 zile",view.to_csv(index=False).encode(),file_name="natgas_ec46_46_zile_6_coloane.csv",mime="text/csv",use_container_width=True)
 with tabs[1]:
     st.subheader("Hartă temperatură • EC46")
     selected=st.select_slider("Ziua prognozată",options=day_list,value=day_list[min(6,len(day_list)-1)],key="tempdate")
