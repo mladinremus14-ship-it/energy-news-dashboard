@@ -125,93 +125,125 @@ def historical_ng_price_changes():
         return {}
 
 with tabs[0]:
-    st.subheader("EC46 • 46 zile")
-    st.caption("6 coloane • semnal meteo din variația HDD față de ziua anterioară")
+    st.subheader("EC46 • SUA și Top 3 • 46 zile")
+    st.caption("Top 3 = Midwest, Northeast și West • calculat automat din aceeași prognoză EC46.")
+    st.caption("Δ HDD = HDD din ziua respectivă − HDD din ziua precedentă (NU comparație 00Z/12Z). Prima zi rămâne «—» dacă nu avem o valoare comparabilă din ziua anterioară.")
+    shades=st.radio("Culorile tabelului",["Discrete","Mai intense","Doar semnale"],horizontal=True,key="full_color_mode")
     price_changes=historical_ng_price_changes()
-    view=table[["date","temp_mean","hdd_weighted","delta_vs_yesterday"]].copy()
-    def meteo_signal(x):
-        if pd.isna(x): return "—"
-        if abs(x)<0.5: return "NEUTRU"
-        return "BULLISH" if x>0 else "BEARISH"
-    def real_return(d):
+    TOP3=["Midwest","Northeast","West"]
+    top3=regional[regional.region.isin(TOP3)].copy()
+    top3["wt_hdd"]=top3.hdd*top3.weight
+    top3["wt_temp"]=top3.temp*top3.weight
+    top3_daily=top3.groupby("date",as_index=False).agg(
+        hdd_w=("wt_hdd","sum"),temp_w=("wt_temp","sum"),
+        weight=("weight","sum"),n=("region","nunique"))
+    top3_daily["hdd_top3"]=top3_daily.hdd_w/top3_daily.weight
+    top3_daily["temp_top3"]=top3_daily.temp_w/top3_daily.weight
+    top3_daily.loc[top3_daily.n<3,["hdd_top3","temp_top3"]]=float("nan")
+    top3_daily["delta_top3"]=top3_daily.hdd_top3.diff()
+    view=table[["date","temp_mean","hdd_weighted","delta_vs_yesterday"]].merge(
+        top3_daily[["date","temp_top3","hdd_top3","delta_top3"]],on="date",how="left").sort_values("date")
+    view["pct_usa"]=(view.delta_vs_yesterday/view.hdd_weighted.shift(1))*100
+    view["pct_top3"]=(view.delta_top3/view.hdd_top3.shift(1))*100
+    def signal_label(delta,pct):
+        if pd.isna(delta) or pd.isna(pct):return "—"
+        if abs(delta)<0.05:return f"NEUTRU {pct:+.1f}%"
+        return ("BULLISH " if delta>0 else "BEARISH ")+f"{pct:+.1f}%"
+    def actual_return(d):
         v=price_changes.get(d)
-        if v is None or pd.isna(v): return "—"
-        if abs(v)<0.05: return "0,0%"
+        if v is None or pd.isna(v):return "—"
+        if abs(v)<0.05:return "0,0%"
         return ("▲ " if v>0 else "▼ ")+f"{v:+.1f}%"
-    view["Semnal"]=view["delta_vs_yesterday"].map(meteo_signal)
-    view["Real"]=view["date"].map(real_return)
-    view=view.rename(columns={"date":"Ziua","temp_mean":"Temp.","hdd_weighted":"HDD","delta_vs_yesterday":"Δ HDD"})
+    view["Semnal SUA"]=[signal_label(d,p) for d,p in zip(view.delta_vs_yesterday,view.pct_usa)]
+    view["Semnal Top 3"]=[signal_label(d,p) for d,p in zip(view.delta_top3,view.pct_top3)]
+    view["Real"]=view.date.map(actual_return)
+    view=view.rename(columns={"date":"Ziua","temp_mean":"°C SUA",
+        "hdd_weighted":"HDD SUA","delta_vs_yesterday":"Δ HDD SUA",
+        "temp_top3":"°C Top 3","hdd_top3":"HDD Top 3","delta_top3":"Δ HDD Top 3"})
     view["Ziua"]=pd.to_datetime(view["Ziua"]).dt.strftime("%d.%m")
-    def color_temp(v):
-        if pd.isna(v): return ""
-        bg="#2563eb" if v<0 else "#475569" if v<10 else "#b45309"
-        return f"background-color:{bg};color:white"
-    def color_delta(v):
-        if pd.isna(v): return ""
-        alpha=0.20+0.80*min(abs(float(v))/5.0,1)
-        rgb="30,80,215" if v>0 else "200,35,50" if v<0 else "100,100,100"
-        return f"background-color:rgba({rgb},{alpha:.2f});color:white;font-weight:600"
-    def color_signal(v):
-        bg="#1d4ed8" if v=="BULLISH" else "#b91c1c" if v=="BEARISH" else "#475569"
-        return f"background-color:{bg};color:white;font-weight:600"
-    def color_real(v):
-        bg="#166534" if "▲" in str(v) else "#b91c1c" if "▼" in str(v) else "#475569"
-        return f"background-color:{bg};color:white;font-weight:600" if v!="—" else ""
-    style=(view.style.format({"Temp.":"{:.1f}","HDD":"{:.2f}","Δ HDD":"{:+.2f}"},na_rep="—")
-           .map(color_temp,subset=["Temp."])
-           .map(color_delta,subset=["Δ HDD"])
-           .map(color_signal,subset=["Semnal"])
-           .map(color_real,subset=["Real"]))
-    st.dataframe(style,use_container_width=False,hide_index=True,height=570,
-                 column_config={
-                    "Ziua":st.column_config.TextColumn("Ziua",width=64),
-                    "Temp.":st.column_config.NumberColumn("Temp.",width=70),
-                    "HDD":st.column_config.NumberColumn("HDD",width=75),
-                    "Δ HDD":st.column_config.NumberColumn("Δ HDD",width=80),
-                    "Semnal":st.column_config.TextColumn("Semnal",width=91),
-                    "Real":st.column_config.TextColumn("Real",width=83)})
-    st.markdown("#### De ce BULLISH sau BEARISH? • schimbare față de ieri")
-    explain_date=st.selectbox("Alege ziua pentru explicație",day_list,index=min(1,len(day_list)-1),key="ec46_explain_date")
-    date_idx=day_list.index(explain_date)
-    if date_idx==0:
-        st.info("Prima zi: nu avem încă HDD pentru ziua calendaristică anterioară în aceeași prognoză. Nu atribuim un semnal fără referință.")
+    cols=["Ziua","°C SUA","HDD SUA","Δ HDD SUA","Semnal SUA",
+          "°C Top 3","HDD Top 3","Δ HDD Top 3","Semnal Top 3","Real"]
+    view=view[cols]
+    def shade(v):
+        if pd.isna(v):return ""
+        strength=min(abs(float(v))/(3.0 if shades=="Mai intense" else 7.0),1.0)
+        alpha=0.22+0.74*strength
+        rgb="37,99,235" if v>0 else "205,40,59" if v<0 else "100,110,125"
+        return f"background-color:rgba({rgb},{alpha:.3f});color:white;font-weight:600"
+    def temp_shade(v):
+        if pd.isna(v) or shades=="Doar semnale":return ""
+        return ("background-color:#3b78b4;color:white" if v<=2 else
+                "background-color:#5b667d;color:white" if v<=10 else
+                "background-color:#aa5267;color:white")
+    def hdd_shade(v):
+        if pd.isna(v) or shades=="Doar semnale":return ""
+        return ("background-color:#236991;color:white" if v>=25 else
+                "background-color:#62637a;color:white" if v>=18 else
+                "background-color:#91516a;color:white")
+    def signal_shade(v):
+        if "BULLISH" in str(v):return "background-color:#176848;color:white;font-weight:700"
+        if "BEARISH" in str(v):return "background-color:#a23142;color:white;font-weight:700"
+        if "NEUTRU" in str(v):return "background-color:#64748b;color:white;font-weight:700"
+        return ""
+    def real_shade(v):
+        if "▲" in str(v):return "background-color:#176848;color:white;font-weight:700"
+        if "▼" in str(v):return "background-color:#a23142;color:white;font-weight:700"
+        return ""
+    def day_shade(v):return "background-color:#826f3f;color:white;font-weight:700"
+    style=view.style.format({"°C SUA":"{:.1f}","HDD SUA":"{:.2f}",
+        "Δ HDD SUA":"{:+.2f}","°C Top 3":"{:.1f}",
+        "HDD Top 3":"{:.2f}","Δ HDD Top 3":"{:+.2f}"},na_rep="—")
+    style=style.map(day_shade,subset=["Ziua"])
+    style=style.map(temp_shade,subset=["°C SUA","°C Top 3"])
+    style=style.map(hdd_shade,subset=["HDD SUA","HDD Top 3"])
+    if shades!="Doar semnale":
+        style=style.map(shade,subset=["Δ HDD SUA","Δ HDD Top 3"])
+    style=style.map(signal_shade,subset=["Semnal SUA","Semnal Top 3"])
+    style=style.map(real_shade,subset=["Real"])
+    st.dataframe(style,use_container_width=True,hide_index=True,height=590)
+    st.caption("Procentele din chenarele BULLISH / BEARISH reprezintă variația HDD față de ziua precedentă, nu o probabilitate și nu o variație estimată a PREȚULUI NatGas.")
+    st.caption("°C SUA = medie în cele 15 orașe eșantionate; HDD SUA = medie a 5 regiuni ponderată prin proxy de consum rezidențial/comercial. °C / HDD Top 3 = medii reponderate și normalizate pentru Midwest, Northeast și West.")
+    st.caption("Real = variația zilnică de închidere futures NG=F (dacă disponibilă); nu cererea reală de gaz.")
+    st.markdown("#### De ce BULLISH sau BEARISH?")
+    chosen=st.selectbox("Ziua analizată",day_list,index=min(1,len(day_list)-1),key="ec46_explain_date")
+    i=day_list.index(chosen)
+    if i==0:
+        st.info("Prima zi: fără referință de ieri în această prognoză EC46; afișăm «—» în loc să inventăm un semnal.")
     else:
-        date_prev=day_list[date_idx-1]
-        today=regional[regional.date==explain_date].set_index("region")
-        yesterday=regional[regional.date==date_prev].set_index("region")
-        breakdown=[]
-        for rg in today.index.intersection(yesterday.index):
-            curr=float(today.at[rg,"weighted"])
-            prev=float(yesterday.at[rg,"weighted"])
-            change=curr-prev
-            breakdown.append({"Regiune":rg,"Δ HDD ponderat":change})
-        changes=pd.DataFrame(breakdown)
-        total=float(changes["Δ HDD ponderat"].sum()) if not changes.empty else float("nan")
-        prev_hdd=float(yesterday["weighted"].sum()) if not yesterday.empty else float("nan")
-        pct_change=total / prev_hdd * 100 if pd.notna(prev_hdd) and prev_hdd>0 and pd.notna(total) else float("nan")
-        positives=changes[changes["Δ HDD ponderat"]>0.001].sort_values("Δ HDD ponderat",ascending=False)
-        negatives=changes[changes["Δ HDD ponderat"]< -0.001].sort_values("Δ HDD ponderat")
-        def explain_names(frame):
-            return ", ".join(f"{r['Regiune']} ({r['Δ HDD ponderat']:+.2f})" for _,r in frame.iterrows()) if not frame.empty else "niciuna"
-        pct_text=f"{pct_change:+.1f}%" if pd.notna(pct_change) else "indisponibil"
-        st.caption(f"Comparație pentru {explain_date} față de {date_prev} • variație HDD ponderat: {pct_text}")
-        if pd.isna(total):
-            st.warning("Nu există suficiente date pentru calcul.")
-        elif total>=0.5:
-            st.info(f"### BULLISH meteo • {pct_text} HDD\n**Este bullish pentru cererea potențială de încălzire pentru că** indicele HDD ponderat a crescut cu **{total:+.2f}** față de {date_prev}. Creșterea este susținută de: {explain_names(positives)}. Regiuni cu scăderi: {explain_names(negatives)}.\n\n*Procentul este creșterea HDD față de ieri, NU creșterea prognozată a prețului gazului.*")
-        elif total<=-0.5:
-            st.warning(f"### BEARISH meteo • {pct_text} HDD\n**Este bearish pentru cererea potențială de încălzire pentru că** indicele HDD ponderat a scăzut cu **{total:+.2f}** față de {date_prev}. Cele mai importante scăderi sunt în: {explain_names(negatives)}. Regiuni cu creșteri: {explain_names(positives)}.\n\n*Procentul este scăderea HDD față de ieri, NU scăderea prognozată a prețului gazului.*")
-        else:
-            st.info(f"### NEUTRU meteo • {pct_text} HDD\nΔ HDD ponderat = **{total:+.2f}** față de {date_prev}; schimbarea este sub pragul orientativ de ±0,5 HDD.\n\n*Procentul reflectă HDD, nu prețul gazului.*")
-        with st.expander("Verifică calculul pe regiuni"):
-            st.dataframe(changes.style.format({"Δ HDD ponderat":"{:+.3f}"}),hide_index=True,use_container_width=True)
-    st.caption("Clasificarea este un semnal meteo din diferența dintre ZILE consecutive ale aceleiași prognoze EC46. Nu măsoară surpriza față de rularea anterioară și nu constituie o prognoză a prețului NatGas.")
-    st.caption("Semnal = direcția necesarului de încălzire față de ziua precedentă, NU variația față de rularea ECMWF precedentă. Nu prezice prețul.")
-    st.caption("Real = variația zilnică a închiderii contractului futures NG=F, nu consumul real de gaz. „—” = zi viitoare, netranzacționată ori sursă indisponibilă.")
-    with st.expander("Detalii meteo • tabel complet"):
+        previous=day_list[i-1]
+        row=table[table.date==chosen].iloc[0]
+        prevrow=table[table.date==previous].iloc[0]
+        topcurr=top3_daily[top3_daily.date==chosen].iloc[0]
+        topprev=top3_daily[top3_daily.date==previous].iloc[0]
+        def card_text(label,new,old):
+            if pd.isna(new) or pd.isna(old) or old<=0:
+                st.warning(f"{label}: lipsesc valori pentru comparație.")
+                return
+            change=float(new-old)
+            pct=100*change/old
+            typ="BULLISH" if change>=0.05 else "BEARISH" if change<=-0.05 else "NEUTRU"
+            explanation="crește" if change>0 else "scade" if change<0 else "rămâne constant"
+            msg=(f"**{label}: {typ} meteo • {pct:+.1f}% HDD.** "
+                 f"Este {typ.lower()} pentru necesarul potențial de încălzire deoarece "
+                 f"indicele {explanation} de la **{old:.2f}** la **{new:.2f}** HDD "
+                 f"({change:+.2f} HDD) față de {previous}. "
+                 "Acesta NU este procentul de creștere/scădere prognozat pentru prețul NatGas.")
+            if typ=="BEARISH":st.warning(msg)
+            elif typ=="BULLISH":st.info(msg)
+            else:st.info(msg)
+        card_text("SUA",float(row.hdd_weighted),float(prevrow.hdd_weighted))
+        card_text("Top 3",float(topcurr.hdd_top3),float(topprev.hdd_top3))
+        with st.expander("Regiunile care au crescut / scăzut"):
+            rr=regional[regional.date.isin([previous,chosen])].pivot(
+                 index="region",columns="date",values="weighted")
+            rr["Δ HDD ponderat"]=rr[chosen]-rr[previous]
+            st.dataframe(rr[["Δ HDD ponderat"]].sort_values("Δ HDD ponderat",ascending=False)
+                .style.format({"Δ HDD ponderat":"{:+.2f}"}),use_container_width=True)
+    with st.expander("Detalii meteo"):
         st.dataframe(table,hide_index=True,use_container_width=True)
-        st.caption("HDD sunt indici proxy, ponderați cu consum regional rezidențial/comercial.")
-    st.download_button("Descarcă CSV • 46 zile",view.to_csv(index=False).encode(),file_name="natgas_ec46_46_zile_6_coloane.csv",mime="text/csv",use_container_width=True)
+    st.download_button("Descarcă tabelul complet CSV",view.to_csv(index=False).encode("utf-8"),
+        file_name="natgas_ec46_sua_top3_46zile.csv",mime="text/csv",use_container_width=True)
+
 with tabs[1]:
     st.subheader("Hartă temperatură • EC46")
     selected=st.select_slider("Ziua prognozată",options=day_list,value=day_list[min(6,len(day_list)-1)],key="tempdate")
