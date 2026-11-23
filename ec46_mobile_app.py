@@ -170,6 +170,38 @@ with tabs[0]:
                     "Δ HDD":st.column_config.NumberColumn("Δ HDD",width=80),
                     "Semnal":st.column_config.TextColumn("Semnal",width=91),
                     "Real":st.column_config.TextColumn("Real",width=83)})
+    st.markdown("#### De ce BULLISH sau BEARISH? • schimbare față de ieri")
+    explain_date=st.selectbox("Alege ziua pentru explicație",day_list,index=min(1,len(day_list)-1),key="ec46_explain_date")
+    date_idx=day_list.index(explain_date)
+    if date_idx==0:
+        st.info("Prima zi: nu avem încă HDD pentru ziua calendaristică anterioară în aceeași prognoză. Nu atribuim un semnal fără referință.")
+    else:
+        date_prev=day_list[date_idx-1]
+        today=regional[regional.date==explain_date].set_index("region")
+        yesterday=regional[regional.date==date_prev].set_index("region")
+        breakdown=[]
+        for rg in today.index.intersection(yesterday.index):
+            curr=float(today.at[rg,"weighted"])
+            prev=float(yesterday.at[rg,"weighted"])
+            change=curr-prev
+            breakdown.append({"Regiune":rg,"Δ HDD ponderat":change})
+        changes=pd.DataFrame(breakdown)
+        total=float(changes["Δ HDD ponderat"].sum()) if not changes.empty else float("nan")
+        positives=changes[changes["Δ HDD ponderat"]>0.001].sort_values("Δ HDD ponderat",ascending=False)
+        negatives=changes[changes["Δ HDD ponderat"]< -0.001].sort_values("Δ HDD ponderat")
+        def explain_names(frame):
+            return ", ".join(f"{r['Regiune']} ({r['Δ HDD ponderat']:+.2f})" for _,r in frame.iterrows()) if not frame.empty else "niciuna"
+        if pd.isna(total):
+            st.warning("Nu există suficiente date pentru calcul.")
+        elif total>=0.5:
+            st.info(f"**BULLISH pentru cererea potențială de încălzire, nu neapărat pentru preț:** indicele HDD ponderat a crescut cu **{total:+.2f}** față de {date_prev}. Creșterea este susținută de: {explain_names(positives)}. Regiuni cu retrageri: {explain_names(negatives)}.")
+        elif total<=-0.5:
+            st.warning(f"**BEARISH pentru cererea potențială de încălzire, nu neapărat pentru preț:** indicele HDD ponderat a scăzut cu **{total:+.2f}** față de {date_prev}. Cele mai importante scăderi sunt în: {explain_names(negatives)}. Regiuni cu creșteri: {explain_names(positives)}.")
+        else:
+            st.info(f"**NEUTRU pentru cererea potențială de încălzire:** Δ HDD ponderat = **{total:+.2f}** față de {date_prev}; schimbarea este sub pragul orientativ de ±0,5.")
+        with st.expander("Verifică calculul pe regiuni"):
+            st.dataframe(changes.style.format({"Δ HDD ponderat":"{:+.3f}"}),hide_index=True,use_container_width=True)
+    st.caption("Clasificarea este un semnal meteo din diferența dintre ZILE consecutive ale aceleiași prognoze EC46. Nu măsoară surpriza față de rularea anterioară și nu constituie o prognoză a prețului NatGas.")
     st.caption("Semnal = direcția necesarului de încălzire față de ziua precedentă, NU variația față de rularea ECMWF precedentă. Nu prezice prețul.")
     st.caption("Real = variația zilnică a închiderii contractului futures NG=F, nu consumul real de gaz. „—” = zi viitoare, netranzacționată ori sursă indisponibilă.")
     with st.expander("Detalii meteo • tabel complet"):
