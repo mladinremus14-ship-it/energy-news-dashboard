@@ -101,7 +101,7 @@ except Exception as ex:
     st.error(f"Nu am putut prelua prognoza EC46: {ex}");st.stop()
 day_list=table.date.tolist()
 if not day_list:st.stop()
-tabs=st.tabs(["📅 46 zile","🌡️ European","🧊 Aer polar","🔥 HDD regiuni"])
+tabs=st.tabs(["📅 46 zile","🌡️ European","🧊 Aer polar","🔥 HDD regiuni","📊 3 zone ENS"])
 @st.cache_data(ttl=3600,show_spinner=False)
 def historical_ng_price_changes():
     """Closing-price return of NG=F futures, by New York trading date."""
@@ -205,5 +205,75 @@ with tabs[3]:
     st.bar_chart(rows.set_index("region")[["weighted"]],horizontal=True)
     st.dataframe(rows[["region","pondere_pct","temp","hdd","weighted"]].rename(columns={"region":"Regiune","pondere_pct":"Pondere gaz %","temp":"Temp. °C","hdd":"HDD65","weighted":"Contribuție ponderată"}),hide_index=True,use_container_width=True)
     st.caption("Ponderile sunt aproximative, bazate pe consum anual rezidențial și comercial, nu exclusiv încălzire.")
+
+# ENS HISTORIC: date din arhiva NatGas Mobile, nu din modelul EC46.
+# Comparatii ECMWF ENS 12Z minus 00Z, pentru aceleasi zile calendaristice.
+ENS_ARCHIVE_DELTAS={
+    "2026-11-19":{"Midwest":(0.39,-5.33),"Northeast":(2.62,-3.46),"South":(2.27,-5.88),"Mountain":(-7.07,-15.81),"Pacific":(-2.69,-5.94)},
+    "2026-11-20":{"Midwest":(0.59,-2.62),"Northeast":(2.10,-5.41),"South":(-0.78,-8.83),"Mountain":(-6.15,-2.82),"Pacific":(-3.62,0.07)},
+    "2026-11-21":{"Midwest":(0.80,-0.45),"Northeast":(-2.47,3.17),"South":(3.15,0.80),"Mountain":(0.87,-9.15),"Pacific":(-0.20,-3.73)}
+}
+ENS_GAS_WEIGHTS={"Midwest":.3277,"Northeast":.2358,"South":.2302,"Mountain":.0856,"Pacific":.1207}
+ENS_MAIN_REGIONS=["Midwest","Northeast","South"]
+with tabs[4]:
+    st.subheader("📊 3 zone NatGas — BULLISH / BEARISH")
+    st.caption("Date REALE istorice ECMWF ENS din arhiva NatGas Mobile (19–21 nov. 2026). Comparația este 12Z minus 00Z în aceeași zi, pe aceleași date prognozate. NU este EC46 și NU se actualizează automat încă.")
+    ens_day=st.selectbox("Data rulărilor ENS (UTC)",sorted(ENS_ARCHIVE_DELTAS.keys(),reverse=True),key="ens_3_day")
+    ens_window=st.radio("Interval comparat",["7 zile","14 zile"],horizontal=True,key="ens_3_window")
+    ix=0 if ens_window=="7 zile" else 1
+    es=ENS_ARCHIVE_DELTAS[ens_day]
+    data=[]
+    for r in ENS_GAS_WEIGHTS:
+        delta=es[r][ix]
+        w=ENS_GAS_WEIGHTS[r]
+        data.append({"Regiune":r,"Pondere gaz (%)":w*100,"Δ HDD ENS":delta,"Impact ponderat":delta*w})
+    eframe=pd.DataFrame(data)
+    main=eframe[eframe["Regiune"].isin(ENS_MAIN_REGIONS)].copy()
+    total_all=float(eframe["Impact ponderat"].sum())
+    total_main=float(main["Impact ponderat"].sum())
+    def sign_label(v):
+        if v>0.05:return "BULLISH meteo"
+        if v< -0.05:return "BEARISH meteo"
+        return "NEUTRU"
+    def signed(v):return f"{v:+.3f}"
+    a,b=st.columns(2)
+    a.metric("3 zone • impact ponderat",signed(total_main),help="Suma contribuțiilor Midwest + Northeast + South; nu un HDD național")
+    b.metric("Toate 5 • impact ponderat",signed(total_all),help="Suma tuturor celor cinci regiuni ENS, bazată pe ponderi proxy")
+    st.markdown(f"**Semnal 3 zone: {sign_label(total_main)}**")
+    st.markdown(f"**Semnal toate regiunile: {sign_label(total_all)}**")
+    st.caption("Ponderile sunt proxy din consumul rezidențial și comercial EIA 2024, nu consum exact pentru încălzire. Impactul este indice HDD ponderat; nu Bcf și nu prognoză de preț.")
+    view=main[["Regiune","Pondere gaz (%)","Δ HDD ENS","Impact ponderat"]].copy()
+    def ens_cell_color(x):
+        if pd.isna(x):return ""
+        level=min(abs(float(x))/3.0,1.0)
+        alpha=0.18+0.75*level
+        rgb="30,75,215" if x>0 else "210,35,45" if x<0 else "100,100,100"
+        return f"background-color:rgba({rgb},{alpha:.3f});color:white;font-weight:700"
+    st.dataframe(view.style.format({"Pondere gaz (%)":"{:.2f}","Δ HDD ENS":"{:+.2f}","Impact ponderat":"{:+.3f}"})
+         .map(ens_cell_color,subset=["Δ HDD ENS","Impact ponderat"]),use_container_width=True,hide_index=True)
+    chart=go.Figure(go.Bar(
+        x=main["Regiune"].tolist(),y=main["Impact ponderat"].tolist(),
+        marker_color=["#2563eb" if v>=0 else "#dc2626" for v in main["Impact ponderat"]],
+        text=[signed(x) for x in main["Impact ponderat"]],textposition="outside"
+    ))
+    chart.update_layout(height=335,margin={"l":0,"r":0,"t":22,"b":0},
+                        yaxis_title="Impact HDD ponderat",xaxis_title="",showlegend=False)
+    st.plotly_chart(chart,use_container_width=True,config={"displayModeBar":False})
+    positive=main[main["Impact ponderat"]>0.000001].sort_values("Impact ponderat",ascending=False)
+    negative=main[main["Impact ponderat"]< -0.000001].sort_values("Impact ponderat")
+    why_bull=", ".join(f"{r['Regiune']} ({signed(r['Impact ponderat'])})" for _,r in positive.iterrows()) or "nicio regiune importantă"
+    why_bear=", ".join(f"{r['Regiune']} ({signed(r['Impact ponderat'])})" for _,r in negative.iterrows()) or "nicio regiune importantă"
+    if total_main>0.05:
+        st.info(f"**Este BULLISH meteorologic pentru cele 3 zone deoarece** HDD adăugate în {why_bull} depășesc HDD retrase în {why_bear}.")
+    elif total_main< -0.05:
+        st.warning(f"**Este BEARISH meteorologic pentru cele 3 zone deoarece** HDD retrase în {why_bear} depășesc HDD adăugate în {why_bull}.")
+    else:
+        st.info("**Semnal NEUTRU pentru cele trei zone**: revizuirile de frig aproape se compensează.")
+    if (total_main>0.05 and total_all< -0.05) or (total_main< -0.05 and total_all>0.05):
+        st.warning("**Atenție: semnalele sunt opuse!** Celelalte două regiuni, Mountain și Pacific, inversează sensul totalului de 5 regiuni. Pentru SUA nu folosim concluzia celor 3 zone ca semnal național.")
+    with st.expander("Vezi și Mountain / Pacific și verifică totalul"):
+        st.dataframe(eframe.style.format({"Pondere gaz (%)":"{:.2f}","Δ HDD ENS":"{:+.2f}","Impact ponderat":"{:+.3f}"}),hide_index=True,use_container_width=True)
+    st.download_button("Descarcă analiza ENS CSV",eframe.to_csv(index=False).encode("utf-8"),file_name=f"ens_3_regiuni_{ens_day}_{7 if ix==0 else 14}z.csv",mime="text/csv",use_container_width=True)
+
 st.divider()
 st.caption("EC46 ≠ ECMWF ENS 00Z/12Z. Această aplicație nu estimează prețul NatGas și nu modifică NatGas Mobile.")
